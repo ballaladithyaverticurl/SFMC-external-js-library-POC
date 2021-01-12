@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="en-us">
+    <body>
+        <form method="POST" action="http://pub.email.wework.com/contactExitV3" name="myForm">
+            <input type="file" id="fileInput">
+            <input type="hidden" id="submitted" name="submitted" value="submitted">
+            <input type="button" id="upload" value="upload" onclick="excelToJSON()"> <br><br>
+            <input type="text" id="jsonObject" name="jsonObject">
+            <input type="submit" id="submit" value="submit">
+        </form>
+
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.8.0/jszip.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.8.0/xlsx.js"></script>
+
+        <script>
+            function excelToJSON (){
+                var json_object;
+                var files = document.getElementById("fileInput").files;
+                var file = files[0];
+
+                var reader = new FileReader();
+            
+                reader.onload = function(e) {
+                    var data = e.target.result;
+                    var workbook = XLSX.read(data, {
+                    type: 'binary'
+                    });
+            
+                    workbook.SheetNames.forEach(function(sheetName) {
+
+                    var XL_row_object = XLSX.utils.sheet_to_row_object_array(workbook.Sheets[sheetName]);
+                    //console.log(XL_row_object);
+                    json_object = JSON.stringify(XL_row_object);
+                    //console.log(json_object);
+                    //document.myForm.jsonObject.value = json_object;
+                    document.getElementById("jsonObject").value = json_object;
+            
+                    })
+            
+                };
+                reader.onerror = function(ex) {
+                    //console.log(ex);
+                };
+                reader.readAsBinaryString(file);
+            };
+        </script>
+
+        %%[
+
+            VAR @authCredentials, @authUrl, @authReturnCode, @accessToken, @json_object, @regExPattern,
+            @journeyName, @baseURL, @finalURL, @journeyDetails, @journeyKey, @body, @callstatus,
+            @response, @returnCode_1, @statusText
+
+            /*Get Access Token*/
+
+            SET @authCredentials = '{"clientId":"XXXX","clientSecret":"XXXXX"}'
+            SET @authUrl         = 'https://XXXXXX.auth.marketingcloudapis.com/v1/requestToken'
+            SET @authReturnCode      = HTTPPOST(@authUrl,"application/json",@authCredentials,@response)
+            IF @authReturnCode ==  200 THEN
+                SET @accessToken = Substring(@response,17,24)
+            ENDIF
+
+            /*POST Handler*/
+
+            IF REQUESTPARAMETER("submitted") == "submitted" THEN
+                set @json_object = REQUESTPARAMETER("jsonObject")
+                SET @regExPattern = '"DefinitionKey":"(.*?)"}'
+                SET @journeyName = RegExMatch(@json_object, @regExPattern, 1)
+                SET @baseURL = "https://XXXXX.rest.marketingcloudapis.com/interaction/v1/interactions"
+                SET @finalURL = CONCAT(@baseURL, "?nameOrDescription=" ,@journeyName)
+        ]%%
+
+        <!-- GET the Journey details -->
+
+        <script runat="server">
+                Platform.Load("Core","1.1.1");
+                if(Request.Method == "POST")
+                {
+                    var mytoken = Variable.GetValue("@accessToken");
+                    var URL = Variable.GetValue("@finalURL");
+                    var headerNames = ["Accept", "Authorization"];
+                    var headerValues = ["application/json", "Bearer "+mytoken];
+                    var response = HTTP.Get(URL, headerNames, headerValues);
+                    Variable.SetValue("journeyDetails",response.Content);
+                }
+        </script> 
+
+        <!-- Extract the journey key -->
+
+        %%[
+            SET @journeyKey = Substring(@journeyDetails, 107, 36)
+        ]%% 
+
+        <!-- Replace journey name with journey key and prepare the final API payload -->
+
+        <script runat="server">
+                Platform.Load("Core","1.1.1");
+                if(Request.Method == "POST")
+                {
+                    var journeyKey = Variable.GetValue("@journeyKey");
+                    var json = Variable.GetValue("@json_object");
+                    var jsonObj = Platform.Function.ParseJSON(json);
+
+                    if (jsonObj.length > 0) {
+                        for (var i = 0; i < jsonObj.length; i++ ) {
+                            var item = jsonObj[i];
+                            item['DefinitionKey'] = journeyKey;
+                        }
+                    }
+                    else{
+                        Write("Nothing found")
+                    }
+                    json = Platform.Function.Stringify(jsonObj)
+                    Platform.Variable.SetValue("@body",json);
+                }
+        </script>
+
+        <!-- Final API call to remove the contacts -->
+
+        %%[
+            SET @accessToken = CONCAT('Bearer ', @accessToken)
+            SET @returnCode_1 =   HTTPPost2("https://XXXXX.rest.marketingcloudapis.com/interaction/v1/interactions/contactexit", "application/json", @body, False, @callstatus, @response, 'Authorization', @accessToken)
+            IF @returnCode_1 == "202" THEN
+                SET @statusText = "Contact successfully removed."
+            ELSE 
+                SET @statusText = "Something went wrong. Please try again."
+            ENDIF
+            ENDIF 
+        ]%% 
+
+        <h2>%%=v(@statusText)=%%</h2>
+    </body>
+</html>
